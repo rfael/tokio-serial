@@ -222,13 +222,17 @@ impl AsyncRead for Serial {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let mut guard = ready!(self.io.poll_read_ready(cx))?;
-        match guard.try_io(|_| {
-            let read = self.io.get_ref().read(buf.initialize_unfilled())?;
-            return Ok(buf.advance(read));
-        }) {
-            Ok(result) => return Poll::Ready(result),
-            Err(_would_block) => return Poll::Pending,
+        loop {
+            let mut guard = ready!(self.io.poll_read_ready(cx))?;
+
+            match guard.try_io(|_| {
+                let read = self.io.get_ref().read(buf.initialize_unfilled())?;
+                buf.advance(read);
+                Ok(())
+            }) {
+                Ok(result) => return Poll::Ready(result),
+                Err(_would_block) => continue,
+            }
         }
     }
 }
@@ -239,23 +243,28 @@ impl AsyncWrite for Serial {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let mut guard = ready!(self.io.poll_write_ready(cx))?;
-        return match guard.try_io(|_| self.io.get_ref().write(buf)) {
-            Ok(x) => Poll::Ready(x),
-            Err(_) => Poll::Pending,
-        };
+        loop {
+            let mut guard = ready!(self.io.poll_write_ready(cx))?;
+
+            match guard.try_io(|_| self.io.get_ref().write(buf)) {
+                Ok(x) => return Poll::Ready(x),
+                Err(_) => continue,
+            };
+        }
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let mut guard = ready!(self.io.poll_write_ready(cx))?;
-        let result = match guard.try_io(|_| self.io.get_ref().flush()) {
-            Ok(x) => Poll::Ready(x),
-            Err(_) => Poll::Pending,
-        };
-        return result;
+        loop {
+            let mut guard = ready!(self.io.poll_write_ready(cx))?;
+
+            match guard.try_io(|_| self.io.get_ref().flush()) {
+                Ok(x) => return Poll::Ready(x),
+                Err(_) => continue,
+            };
+        }
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        return Poll::Ready(Ok(()));
+        Poll::Ready(Ok(()))
     }
 }
